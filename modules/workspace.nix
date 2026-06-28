@@ -31,6 +31,29 @@ let
           example = 24;
           description = "The size of the cursor. See the System Settings app for allowed sizes for each cursor theme.";
         };
+        cursorFeedback = lib.mkOption {
+          type = nullOr (enum [
+            "Bouncing"
+            "Blinking"
+            "Static"
+            "None"
+          ]);
+          default = null;
+          example = "Bouncing";
+          description = "The cursor feedback icon after launching an application.";
+        };
+        taskManagerFeedback = lib.mkOption {
+          type = nullOr bool;
+          default = null;
+          example = true;
+          description = "The feedback wheel on an application icon after launching an application from the task manager.";
+        };
+        animationTime = lib.mkOption {
+          type = nullOr ints.positive;
+          default = null;
+          example = 5;
+          description = "The duration that the cursorFeedback and taskManagerFeedback run for.";
+        };
       };
     };
 
@@ -47,6 +70,32 @@ let
         default = null;
         example = true;
         description = "Whether to blur the background";
+      };
+    };
+  };
+
+  customWallpaperPluginType = lib.types.submodule {
+    options = {
+      plugin = lib.mkOption {
+        type = lib.types.str;
+        example = "luisbocanegra.smart.video.wallpaper.reborn";
+        description = "The wallpaper plugin identifier.";
+      };
+      config = lib.mkOption {
+        type = with lib.types; attrsOf (attrsOf anything);
+        default = {};
+        example = lib.literalExpression ''
+          {
+            General = {
+              VideoUrls = ''''[{"filename":"file:///path/to/video.mp4","enabled":true}]'''';
+            };
+          }
+        '';
+        description = ''
+          Configuration for the custom wallpaper plugin. This is a nested attribute set
+          where the structure is: configGroup -> key -> value.
+          The configGroup is typically "General" for most plugins.
+        '';
       };
     };
   };
@@ -99,7 +148,7 @@ in
       default = null;
       example = false;
       description = ''
-        Whether clicking the middle mouse button pastes the clipboard content.";
+        Whether clicking the middle mouse button pastes the clipboard content.
       '';
     };
 
@@ -136,9 +185,12 @@ in
       example = {
         theme = "Breeze_Snow";
         size = 24;
+        cursorFeedback = "Bouncing";
+        taskManagerFeedback = true;
+        animationTime = 5;
       };
       description = ''
-        Submodule for configuring the cursor appearance. Both the theme and size are configurable.
+        Submodule for configuring the cursor appearance. The theme, size, cursor feedback, task manager feedback, and animation time are configurable.
       '';
     };
 
@@ -195,6 +247,25 @@ in
       example = "0,64,174,256";
       description = ''
         Set the wallpaper using a plain color. Color is a comma-seperated R,G,B,A string. The alpha is optional (default is 256).
+      '';
+    };
+
+    wallpaperCustomPlugin = lib.mkOption {
+      type = lib.types.nullOr customWallpaperPluginType;
+      default = null;
+      example = lib.literalExpression ''
+        {
+          plugin = "luisbocanegra.smart.video.wallpaper.reborn";
+          config = {
+            General = {
+              VideoUrls = ''''[{"filename":"file:///path/to/video.mp4","enabled":true}]'''';
+            };
+          };
+        }
+      '';
+      description = ''
+        Use a custom wallpaper plugin with configuration. This allows you to use third-party
+        wallpaper plugins like smart video wallpaper, animated wallpapers, etc.
       '';
     };
 
@@ -273,6 +344,15 @@ in
         '';
       };
     };
+
+    widgetStyle = lib.mkOption {
+      type = with lib.types; nullOr str;
+      default = null;
+      example = "breeze";
+      description = ''
+        The widget style to use with Plasma.
+      '';
+    };
   };
 
   config = (
@@ -286,10 +366,11 @@ in
                 wallpaper
                 wallpaperPictureOfTheDay
                 wallpaperPlainColor
+                wallpaperCustomPlugin
               ];
             in
             lib.count (x: x != null) wallpapers <= 1;
-          message = "Can set only one of wallpaper, wallpaperSlideShow, wallpaperPictureOfTheDay, and wallpaperPlainColor.";
+          message = "Can set only one of wallpaper, wallpaperSlideShow, wallpaperPictureOfTheDay, wallpaperPlainColor, and wallpaperCustomPlugin.";
         }
         {
           assertion = (cfg.workspace.splashScreen.engine == null || cfg.workspace.splashScreen.theme != null);
@@ -344,6 +425,9 @@ in
               KDE.SingleClick = (
                 lib.mkIf (cfg.workspace.clickItemTo != null) (cfg.workspace.clickItemTo == "open")
               );
+              KDE.widgetStyle = (
+                lib.mkIf (cfg.workspace.widgetStyle != null) (cfg.workspace.widgetStyle)
+              );
               Sounds.Theme = (lib.mkIf (cfg.workspace.soundTheme != null) cfg.workspace.soundTheme);
             };
             plasmarc = (
@@ -354,6 +438,50 @@ in
                 Mouse.cursorSize = cfg.workspace.cursor.size;
               }
             );
+            klaunchrc = lib.mkMerge [
+              (lib.mkIf (cfg.workspace.cursor != null && cfg.workspace.cursor.cursorFeedback != null) (
+                {
+                  "None" = {
+                    BusyCursorSettings = {
+                      Blinking = false;
+                      Bouncing = false;
+                    };
+                    FeedbackStyle.BusyCursor = false;
+                  };
+                  "Static" = {
+                    BusyCursorSettings = {
+                      Blinking = false;
+                      Bouncing = false;
+                    };
+                    FeedbackStyle.BusyCursor = true;
+                  };
+                  "Blinking" = {
+                    BusyCursorSettings = {
+                      Blinking = true;
+                      Bouncing = false;
+                    };
+                    FeedbackStyle.BusyCursor = true;
+                  };
+                  "Bouncing" = {
+                    BusyCursorSettings = {
+                      Blinking = false;
+                      Bouncing = true;
+                    };
+                    FeedbackStyle.BusyCursor = true;
+                  };
+                }
+                .${cfg.workspace.cursor.cursorFeedback}
+              ))
+
+              (lib.mkIf (cfg.workspace.cursor != null && cfg.workspace.cursor.taskManagerFeedback != null) {
+                FeedbackStyle.TaskbarButton = cfg.workspace.cursor.taskManagerFeedback;
+              })
+
+              (lib.mkIf (cfg.workspace.cursor != null && cfg.workspace.cursor.animationTime != null) {
+                BusyCursorSettings.Timeout = cfg.workspace.cursor.animationTime;
+                TaskbarButtonSettings.Timeout = cfg.workspace.cursor.animationTime;
+              })
+            ];
             ksplashrc.KSplash = (
               lib.mkIf (cfg.workspace.splashScreen.theme != null) {
                 Engine = (
@@ -612,6 +740,29 @@ in
                           throw "plasma-manager: wallpaperBackground is not null and has no option set"
                       }");''
                   }
+              }
+            '';
+            priority = 3;
+          }
+        );
+
+        desktopScript."wallpaper_custom_plugin" = (
+          lib.mkIf (cfg.workspace.wallpaperCustomPlugin != null) {
+            text = ''
+              // Custom wallpaper plugin
+              let allDesktops = desktops();
+              for (var desktopIndex = 0; desktopIndex < allDesktops.length; desktopIndex++) {
+                  var desktop = allDesktops[desktopIndex];
+                  desktop.wallpaperPlugin = "${cfg.workspace.wallpaperCustomPlugin.plugin}";
+
+                  ${builtins.concatStringsSep "\n" (
+                    lib.mapAttrsToList (configGroup: keys: ''
+                      desktop.currentConfigGroup = ["Wallpaper", "${cfg.workspace.wallpaperCustomPlugin.plugin}", "${configGroup}"];
+                      ${builtins.concatStringsSep "\n" (
+                        lib.mapAttrsToList (key: value: ''desktop.writeConfig("${key}", ${builtins.toJSON value});'') keys
+                      )}
+                    '') cfg.workspace.wallpaperCustomPlugin.config
+                  )}
               }
             '';
             priority = 3;
